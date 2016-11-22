@@ -1,0 +1,18 @@
+CC=g++610
+INC=-I./utils
+CFLAGS=-c -DNDEBUG -Wall -std=c++17 -O2
+LDFLAGS=-pthread -Wl,-rpath,/usr/local/gcc610/lib64
+SOURCES=bellman_ford.cc main.cc
+OBJECTS=$(SOURCES:.cc=.o)
+EXECUTABLE=asynch_bellman_ford
+
+all:	$(SOURCES) $(EXECUTABLE)
+
+$(EXECUTABLE):	$(OBJECTS)
+	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
+
+.cc.o:
+	$(CC) $(CFLAGS) $(INC) $< -o $@
+
+clean:
+	rm *.o asynch_bellman_ford
