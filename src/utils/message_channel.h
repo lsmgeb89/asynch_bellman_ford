@@ -11,7 +11,7 @@ namespace utils {
 
 typedef std::size_t ProcessId;
 typedef std::size_t TimeStamp;
-typedef std::ptrdiff_t ChannelWeight;
+typedef float ChannelWeight;
 
 class MessageChannel {
  public:

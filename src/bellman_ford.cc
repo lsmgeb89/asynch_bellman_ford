@@ -38,23 +38,59 @@ void BellmanFord::Run(void) {
   master_thread_.join();
 }
 
+inline void BellmanFord::ResetWaitingList(std::size_t& waiting_msg_id,
+                                          const std::ptrdiff_t& parent_index,
+                                          std::vector<bool>& waiting_list) {
+  // generate explore message id
+  // now we begins to wait acknowledges for this explore message
+  ++waiting_msg_id;
+  // reset waiting list except parent
+  std::fill(waiting_list.begin(), waiting_list.end(), false);
+  if (parent_index != -1) {
+    waiting_list.at(static_cast<size_t>(parent_index)) = true;
+  }
+}
+
+inline void BellmanFord::BroadcastTermination(const utils::ProcessId& id,
+                                              const std::vector<Relation>& relation_list,
+                                              const std::vector<utils::MessageChannel*> channels) {
+  // broadcast termination to children
+  for (std::size_t i(0); i < relation_list.size(); i++) {
+    if (relation_list.at(i) == Children) {
+      channels.at(i)->Send(id, new utils::Message(utils::Terminate, id, 0, 0.0f));
+    }
+  }
+}
+
+inline const bool BellmanFord::IsAllAckReceived(const std::vector<bool>& waiting_list) {
+  return std::all_of(waiting_list.begin(), waiting_list.end(),
+                     [](const bool &received) { return received; });
+}
+
 void BellmanFord::Process(const bool is_source,
                           const utils::ProcessId id,
                           ThreadState* state,
                           std::vector<utils::MessageChannel*> channels) {
   bool exit(false);
   std::ptrdiff_t round(0);
+  // waiting acknowledgements
+  std::vector<Relation> relation_list(channels.size(), Neighbor);
+  std::size_t waiting_msg_id(0); // waiting for which explore message
+  std::vector<bool> waiting_list(channels.size(), false);
+  std::size_t prev_parent_explore_msg_id(0);
+  std::size_t curr_parent_explore_msg_id(0);
+  // bookkeeping
   utils::ProcessId parent_id(0);
-  utils::MessageChannel *parent_channel(nullptr);
-  std::vector<Relation> relation_list(channels.size(), Null);
-  std::size_t dist(is_source ? 0 : std::numeric_limits<std::size_t>::max());
+  std::ptrdiff_t parent_index(-1);
+  float dist(is_source ? 0.0f : std::numeric_limits<float>::infinity());
 
-  // initialization step
+  // initialization step for source
   if (is_source) {
-    proc_cout << "source proc sends dist = " << dist << " to neighbors\n";
+    ResetWaitingList(waiting_msg_id, parent_index, waiting_list);
+    proc_cout << "source process sends dist = " << dist << " to neighbors\n";
     std::for_each(channels.begin(), channels.end(),
-                  [&id, &dist](utils::MessageChannel *const c) {
-                    c->Send(id, new utils::Message(utils::Explore, id, dist)); });
+                  [&id, &dist, &waiting_msg_id](utils::MessageChannel *const c) {
+                    c->Send(id, new utils::Message(utils::Explore, id, waiting_msg_id, dist)); });
   }
 
   while (!exit) {
@@ -69,65 +105,85 @@ void BellmanFord::Process(const bool is_source,
     for (size_t i(0); i < channels.size(); i++) {
       utils::Message *msg_received(nullptr);
 
-      if (channels.at(i)->Receive(id, &msg_received)) {
-        proc_debug << "receives " << msg_received->ToString() << std::endl;
+      if (!channels.at(i)->Receive(id, &msg_received)) { continue; }
+      proc_debug << "receives " << msg_received->ToString() << std::endl;
 
-        // explore messages
-        if (msg_received->type_ == utils::Explore) {
-          auto d(channels.at(i)->GetWeight() + msg_received->dist_);
+      // explore messages
+      if (msg_received->type_ == utils::Explore) {
+        float dist_received(channels.at(i)->GetWeight() + msg_received->dist_);
 
-          // relaxation step
-          if (d < dist) {
-            // inform previous parent that you are not my parent any more
-            if (parent_id && parent_channel) {
-              relation_list.at(i) = Neighbor;
-              proc_debug << "rejects old parent proc " << parent_id << std::endl;
-              parent_channel->Send(id, new utils::Message(utils::NonParent, id, 0));
+        // relaxation step
+        if (dist_received < dist) {
+          // bookkeeping
+          dist = dist_received;
+          std::ptrdiff_t prev_parent(parent_index);
+          parent_index = i;
+          parent_id = msg_received->pid_;
+
+          prev_parent_explore_msg_id = curr_parent_explore_msg_id;
+          curr_parent_explore_msg_id = msg_received->msg_id_;
+
+          relation_list.at(static_cast<size_t>(parent_index)) = Parent;
+
+          ResetWaitingList(waiting_msg_id, parent_index, waiting_list);
+
+          // inform other neighbors to update distance except new parent, but include old parent
+          proc_debug << "informs new dist = " << dist << " to neighbors" << std::endl;
+          for (auto &channel_update : channels) {
+            if (channel_update != channels.at(static_cast<size_t>(parent_index))) {
+              channel_update->Send(id, new utils::Message(utils::Explore, id, waiting_msg_id, dist));
             }
-
-            // bookkeeping
-            dist = d;
-            parent_id = msg_received->id_;
-            parent_channel = channels.at(i);
-            relation_list.at(i) = Parent;
-
-            // inform new parent
-            proc_debug << "informs new parent proc " << parent_id << std::endl;
-            channels.at(i)->Send(id, new utils::Message(utils::Parent, id, 0));
-
-            // inform other neighbors to update distance
-            proc_debug << "informs new dist = " << dist << " to neighbors" << std::endl;
-            for (auto &channel_update : channels) {
-              if (channel_update != channels.at(i)) {
-                channel_update->Send(id, new utils::Message(utils::Explore, id, dist));
-              }
-            }
-          } else {
-            // inform this neighbor that you are not my parent
-            proc_debug << "rejects proc " << msg_received->id_ << " as parent\n";
-            channels.at(i)->Send(id, new utils::Message(utils::NonParent, id, 0));
           }
-        } else if (msg_received->type_ == utils::NonParent) {
-          relation_list.at(i) = Neighbor;
-        } else if (msg_received->type_ == utils::Parent) {
-          relation_list.at(i) = Children;
-        } else if (msg_received->type_ == utils::Complete) {
-          relation_list.at(i) = static_cast<Relation>(relation_list.at(i) | Complete);
-        }
-        delete msg_received;
-      }
-    }
 
-    // exit protocol
-    proc_debug << "relation list:" << RelationListToString(relation_list) << std::endl;
-    if (IsLeaf(relation_list) || IsInternal(relation_list)) {
-      proc_cout << "converge-casts complete message to parent proc " << parent_id
-                 << " and exits. output: parent = " << parent_id << " dist = " << dist << std::endl;
-      parent_channel->Send(id, new utils::Message(utils::Complete, id, 0));
+          // reject old parent
+          if (prev_parent != -1) {
+            proc_debug << "rejects old parent " << msg_received->pid_ << "\n";
+            channels.at(static_cast<std::size_t>(prev_parent))->Send(id, new utils::Message(utils::NonParent, id, prev_parent_explore_msg_id, 0.0f));
+          }
+        } else {
+          // inform this neighbor that you are not my parent
+          proc_debug << "rejects process " << msg_received->pid_ << " as parent\n";
+          channels.at(i)->Send(id, new utils::Message(utils::NonParent, id, msg_received->msg_id_, 0.0f));
+        }
+      } else if (msg_received->type_ == utils::NonParent) {
+        if (msg_received->msg_id_ == waiting_msg_id) {
+          waiting_list.at(i) = true;
+          relation_list.at(i) = Neighbor;
+        }
+      } else if (msg_received->type_ == utils::Parent) {
+        if (msg_received->msg_id_ == waiting_msg_id) {
+          waiting_list.at(i) = true;
+          relation_list.at(i) = Children;
+        }
+      } else if (msg_received->type_ == utils::Terminate) {
+        // exit protocol for non-source node
+        if (i == static_cast<std::size_t>(parent_index) && !is_source) {
+          // broadcast termination to children
+          BroadcastTermination(id, relation_list, channels);
+          delete msg_received;
+          exit = true;
+          proc_cout << "terminates output: parent = " << parent_id << " dist = " << dist << std::endl;
+          break; // for loop
+        }
+      }
+
+      // proceed this message, delete it
+      delete msg_received;
+
+      // inform new parent
+      if (IsAllAckReceived(waiting_list) && !is_source) {
+        proc_debug << "informs new parent process " << parent_id << std::endl;
+        channels.at(static_cast<std::size_t>(parent_index))->Send(id, new utils::Message(utils::Parent, id, curr_parent_explore_msg_id, 0.0f));
+      }
+    } // end for loop
+
+    proc_debug <<"relation list:" << RelationListToString(relation_list) << std::endl;
+
+    // exit protocol for source node
+    if (is_source && IsAllAckReceived(waiting_list)) {
+      BroadcastTermination(id, relation_list, channels);
       exit = true;
-    } else if (IsRoot(relation_list)) {
-      proc_cout << "source proc receives converge cast and exits\n";
-      exit = true;
+      proc_cout << "source process terminates and broadcasts termination\n";
     }
 
     // notify master process that I'm done with this round or I exit

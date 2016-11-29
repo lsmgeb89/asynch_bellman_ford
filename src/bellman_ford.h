@@ -19,11 +19,9 @@ enum ThreadState {
 };
 
 enum Relation {
-  Null = 0,
-  Children = 1 << 0,
-  Parent = 1 << 1,
-  Neighbor = 1 << 2,
-  Complete = 1 << 3
+  Neighbor = 0,
+  Parent = 1,
+  Children = 2
 };
 
 typedef std::vector<std::vector<ptrdiff_t>> ConnectivityMatrix;
@@ -53,24 +51,15 @@ class BellmanFord {
     return ss.str();
   }
 
-  static const bool IsLeaf(const std::vector<Relation>& list) {
-    return std::all_of(list.begin(), list.end(),
-                       [](const Relation& r) { return (r == Neighbor); });
-  }
+  inline void ResetWaitingList(std::size_t& waiting_msg_id,
+                               const std::ptrdiff_t& parent_index,
+                               std::vector<bool>& waiting_list);
 
-  static const bool IsInternal(const std::vector<Relation>& list) {
-    return (std::none_of(list.begin(), list.end(),
-                         [](const Relation& r) {
-                           return (r == Children || r == Null); }) &&
-            std::any_of(list.begin(), list.end(),
-                        [](const Relation& r) { return (r == Parent); }));
-  }
+  inline void BroadcastTermination(const utils::ProcessId& id,
+                                   const std::vector<Relation>& relation_list,
+                                   const std::vector<utils::MessageChannel*> channels);
 
-  static const bool IsRoot(const std::vector<Relation>& list) {
-    return std::none_of(list.begin(), list.end(),
-                       [](const Relation& r) {
-                         return (r == Children || r == Null || r == Parent); });
-  }
+  inline const bool IsAllAckReceived(const std::vector<bool>& waiting_list);
 
  private:
   const utils::ProcessId root_id_;
