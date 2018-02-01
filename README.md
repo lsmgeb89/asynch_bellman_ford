@@ -1,8 +1,8 @@
 # Asynch [Bellman–Ford][bf]
 
 ## Summary
-  * Utilized multithreading and concurrent primitives ([threads][th], [mutexes][mu] & [conditon variables][cv] in C++11 [Thread Support Library][tsl]) to develop a simple simulator which simulates an asynchronous distributed system composed of one master thread and `n` slave threads.
-  * Implemented coordinated behaviors between the master thread and `n` slave threads by using [monitors][mo] consisting of [mutexes][mu] and [conditon variables][cv]
+  * Utilized multi-threading and concurrent primitives ([threads][th], [mutexes][mu] & [condition variables][cv] in C++11 [Thread Support Library][tsl]) to develop a simple simulator which simulates an asynchronous distributed system composed of one master thread and `n` slave threads.
+  * Implemented coordinated behaviors between the master thread and `n` slave threads by using [monitors][mo] consisting of [mutexes][mu] and [condition variables][cv]
   * Implemented [message passing][mp] in bidirected [FIFO][fifo] links between two slave threads by using [mutexes][mu] and [queues][qu]
   * Implemented Asynch [Bellman–Ford][bf] for [shortest paths][sp] from a single source node <code>i<sub>0</sub></code> to all of the other nodes in a weighted undirected graph under the framework of this simulator.
 
